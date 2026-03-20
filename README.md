@@ -9,8 +9,8 @@ Next.js dashboard for Palo Alto ASB (and similar): import **Account Statement** 
    - Run `supabase/migrations/001_initial.sql` in the SQL editor.
 
 2. **Environment**  
-   - Copy `.env.example` to `.env.local`.  
-   - Set `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (service role stays server-only; never expose it in the browser).
+   - Create `.env.local` at the project root (not committed).  
+   - Set `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and optionally `IMPORT_SECRET`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_SPREADSHEET_ID`, `GOOGLE_SHEETS_RANGE` (see Google section).
 
 3. **Google (Sheets + Docs)**  
    Do **not** use your Google “password.” Use a **service account**:
