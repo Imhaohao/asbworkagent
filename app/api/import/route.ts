@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { parseAccountStatementHtml } from "@/lib/asb-parser";
 import {
   assertImportAuthorized,
@@ -68,14 +69,28 @@ export async function POST(req: NextRequest) {
     content_hash: r.contentHash,
   }));
 
-  const { error: txErr } = await supabase.from("transactions").upsert(dbRows, {
-    onConflict: "content_hash",
-    ignoreDuplicates: true,
-  });
-
-  if (txErr) {
-    return NextResponse.json({ error: txErr.message }, { status: 500 });
+  const chunkSize = 400;
+  for (let i = 0; i < dbRows.length; i += chunkSize) {
+    const slice = dbRows.slice(i, i + chunkSize);
+    const { error: txErr } = await supabase.from("transactions").upsert(slice, {
+      onConflict: "content_hash",
+      ignoreDuplicates: true,
+    });
+    if (txErr) {
+      return NextResponse.json(
+        {
+          error: txErr.message,
+          hint:
+            slice.length > 0
+              ? `Upsert failed on rows ${i + 1}–${i + slice.length} of ${dbRows.length}. Check Supabase row/size limits and constraints.`
+              : undefined,
+        },
+        { status: 500 },
+      );
+    }
   }
+
+  revalidatePath("/", "layout");
 
   return NextResponse.json({
     ok: true,

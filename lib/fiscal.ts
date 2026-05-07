@@ -29,6 +29,67 @@ export function quarterLabel(startYear: number, quarter: 1 | 2 | 3 | 4): string 
   return `Q${quarter} (${ranges[quarter]})`;
 }
 
+/** California-style season name aligned to fiscal quarters (Q1 Fall … Q4 Summer). */
+export function quarterSeasonName(quarter: 1 | 2 | 3 | 4): string {
+  const names = { 1: "Fall", 2: "Winter", 3: "Spring", 4: "Summer" } as const;
+  return names[quarter];
+}
+
+/** Wording for constitution text: ASB publishes after first and third quarters. */
+export function constitutionQuarterLabel(quarter: 1 | 2 | 3 | 4): string {
+  if (quarter === 1) return "First Quarter";
+  if (quarter === 3) return "Third Quarter";
+  return `${quarterSeasonName(quarter)} Quarter`;
+}
+
+/**
+ * Choose which two fiscal years feed the dashboard charts.
+ * If the calendar “current / previous” FYs have no rows for this scope (e.g. General
+ * only has older imports), use the two most recent FYs present in data so bars/pie
+ * are not empty.
+ */
+export function chartFiscalYearPair(
+  rollups: { fiscalYearStart: number }[],
+  fyCalendarCurrent: number,
+  fyCalendarPrevious: number,
+): { curr: number; prev: number; usedAdaptiveYears: boolean } {
+  const hasRows = (fy: number) =>
+    rollups.some((r) => r.fiscalYearStart === fy);
+
+  if (hasRows(fyCalendarCurrent) || hasRows(fyCalendarPrevious)) {
+    return {
+      curr: fyCalendarCurrent,
+      prev: fyCalendarPrevious,
+      usedAdaptiveYears: false,
+    };
+  }
+
+  const years = [...new Set(rollups.map((r) => r.fiscalYearStart))].sort(
+    (a, b) => b - a,
+  );
+
+  if (years.length >= 2) {
+    return {
+      curr: years[0],
+      prev: years[1],
+      usedAdaptiveYears: true,
+    };
+  }
+  if (years.length === 1) {
+    return {
+      curr: years[0],
+      prev: years[0] - 1,
+      usedAdaptiveYears: true,
+    };
+  }
+
+  return {
+    curr: fyCalendarCurrent,
+    prev: fyCalendarPrevious,
+    usedAdaptiveYears: false,
+  };
+}
+
 export function quarterDateRange(
   fyStart: number,
   quarter: 1 | 2 | 3 | 4,

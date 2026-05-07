@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rollupEvents } from "@/lib/aggregate";
-import { fiscalYearStart, fiscalYearLabel } from "@/lib/fiscal";
+import { fiscalYearStart } from "@/lib/fiscal";
 import {
   assertImportAuthorized,
   importUnauthorizedResponse,
 } from "@/lib/import-secret";
-import { writeSheetRange } from "@/lib/google-server";
+import { syncFormattedSummarySheet } from "@/lib/google-summary-sheet-sync";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -70,42 +70,22 @@ export async function POST(req: NextRequest) {
       r.fiscalYearStart === fyCurrent || r.fiscalYearStart === fyPrevious,
   );
 
-  const money = (n: number) => n.toFixed(2);
+  try {
+    const { updatedRange, rowCount } = await syncFormattedSummarySheet({
+      spreadsheetId,
+      targetRangeEnv: range,
+      rollups: picked,
+      fyCurrent: fyCurrent,
+      fyPrevious: fyPrevious,
+    });
 
-  const headers = [
-    "Account",
-    "Event / tag",
-    "Fiscal year",
-    "Inflow",
-    "Outflow",
-    "Net",
-    "Transactions",
-    "Receipt lines",
-    "Scholarship (net)",
-    "Ticket-like receipts",
-  ];
-
-  const rows: string[][] = [
-    headers,
-    ...picked.map((r) => [
-      r.accountCode,
-      r.eventKey,
-      fiscalYearLabel(r.fiscalYearStart),
-      money(r.inflow),
-      money(r.outflow),
-      money(r.net),
-      String(r.txnCount),
-      String(r.receiptCount),
-      money(r.scholarshipNet),
-      String(r.ticketLikeCount),
-    ]),
-  ];
-
-  await writeSheetRange(spreadsheetId, range, rows);
-
-  return NextResponse.json({
-    ok: true,
-    updatedRange: range,
-    rowCount: rows.length,
-  });
+    return NextResponse.json({
+      ok: true,
+      updatedRange,
+      rowCount,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Google Sheets request failed";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }

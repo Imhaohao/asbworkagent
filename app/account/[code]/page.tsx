@@ -1,24 +1,21 @@
-import DashboardClient from "./dashboard-client";
-import DashboardSetupError from "./dashboard-setup-error";
+import DashboardClient from "@/app/dashboard-client";
+import DashboardSetupError from "@/app/dashboard-setup-error";
 import {
   loadAccountList,
   loadLastImportAt,
   loadSummary,
 } from "@/lib/summary-data";
-import { redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default async function Page({
-  searchParams,
+export default async function AccountPage({
+  params,
 }: {
-  searchParams: Promise<{ account?: string }>;
+  params: Promise<{ code: string }>;
 }) {
-  const sp = await searchParams;
-  const legacy = sp.account?.trim();
-  if (legacy) {
-    redirect(`/account/${encodeURIComponent(legacy)}`);
-  }
+  const { code: raw } = await params;
+  const accountCode = decodeURIComponent(raw);
 
   let accounts: Awaited<ReturnType<typeof loadAccountList>> = [];
   let summary: Awaited<ReturnType<typeof loadSummary>> | null = null;
@@ -26,10 +23,24 @@ export default async function Page({
   let setupError: string | null = null;
 
   try {
-    [accounts, summary, lastImportAt] = await Promise.all([
-      loadAccountList(),
-      loadSummary(null),
-      loadLastImportAt(null),
+    accounts = await loadAccountList();
+  } catch (e) {
+    setupError = e instanceof Error ? e.message : "Could not load data";
+  }
+
+  if (setupError) {
+    return <DashboardSetupError message={setupError} />;
+  }
+
+  const valid = accounts.some((a) => a.account_code === accountCode);
+  if (!valid) {
+    notFound();
+  }
+
+  try {
+    [summary, lastImportAt] = await Promise.all([
+      loadSummary(accountCode),
+      loadLastImportAt(accountCode),
     ]);
   } catch (e) {
     setupError = e instanceof Error ? e.message : "Could not load data";
@@ -39,23 +50,26 @@ export default async function Page({
     return <DashboardSetupError message={setupError ?? "Unknown error"} />;
   }
 
+  const accountMeta = accounts.find((a) => a.account_code === accountCode)!;
+
   return (
     <main className="mx-auto min-h-screen max-w-6xl px-4 py-10">
       <header className="mb-10">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
-          Overview
+          {accountMeta.account_name || accountCode}
         </h1>
-        <p className="mt-2 max-w-2xl text-zinc-600 dark:text-zinc-400">
-          All imported accounts combined. Import Account Statement exports from
-          ASBWORKS (HTML .xls), then drill into General, Dance, Spirit, or
-          another account from the tabs below. Sync rollups to Google Sheets or
-          generate a fiscal quarter report as a Google Doc.
+        <p className="mt-1 font-mono text-sm text-zinc-500 dark:text-zinc-400">
+          {accountCode}
+        </p>
+        <p className="mt-3 max-w-2xl text-zinc-600 dark:text-zinc-400">
+          Event-level rollups for this account. Use Overview for all accounts
+          combined.
         </p>
       </header>
       <DashboardClient
         accounts={accounts}
-        scopeMode="overview"
-        scopeAccountCode={null}
+        scopeMode="account"
+        scopeAccountCode={accountCode}
         lastImportAtIso={lastImportAt}
         rollupsCurrent={summary.rollupsCurrent}
         rollupsPrevious={summary.rollupsPrevious}

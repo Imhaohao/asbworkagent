@@ -44,6 +44,42 @@ export function parseAccountStatementHtml(
       .find("td")
       .map((__, td) => $(td).text().replace(/\s+/g, " ").trim())
       .get();
+
+    /* Balance forward uses colspan so Number/Type and Name/Notes/Amount collapse — 5 <td>s */
+    if (cells.length === 5) {
+      const [d, , desc, , balRaw] = cells;
+      if (d === "Date" || !d || !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(d)) return;
+      if (!/balance\s*forward/i.test(desc ?? "")) return;
+      const txnDate = parseUsDate(d);
+      if (Number.isNaN(+txnDate)) return;
+      const balance = balRaw ? parseMoney(balRaw) : null;
+      const amount = 0;
+      const contentHash = contentHashFor({
+        accountCode,
+        refNumber: "BAL-FWD",
+        txnDate: d,
+        txnType: "OPENING",
+        description: desc,
+        payeeName: "",
+        notes: "",
+        amount,
+      });
+      rows.push({
+        txnDate,
+        refNumber: "BAL-FWD",
+        txnType: "OPENING",
+        description: desc,
+        payeeName: "",
+        notes: "",
+        amount,
+        balance,
+        eventKey: "Balance Forward",
+        fiscalYearStart: fiscalYearStart(txnDate),
+        contentHash,
+      });
+      return;
+    }
+
     if (cells.length < 8) return;
     const [d, num, type, desc, name, notes, amtRaw, balRaw] = cells;
     if (d === "Date" || !d || !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(d)) return;
