@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import DashboardClient from "./dashboard-client";
 import DashboardSetupError from "./dashboard-setup-error";
 import {
@@ -14,6 +15,8 @@ export default async function Page({
 }: {
   searchParams: Promise<{ account?: string }>;
 }) {
+  const cookieStore = await cookies();
+  const role = (cookieStore.get("access_role")?.value ?? "admin") as "admin" | "journalist";
   const sp = await searchParams;
   const legacy = sp.account?.trim();
   if (legacy) {
@@ -68,6 +71,7 @@ export default async function Page({
         fyPreviousLabel={summary.fiscalYearPreviousLabel}
         dataFyCurrentLabel={summary.dataFyCurrentLabel}
         dataFyPreviousLabel={summary.dataFyPreviousLabel}
+        role={role}
       />
     </main>
   );

@@ -3,10 +3,22 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EventRollup } from "@/lib/aggregate";
-import { groupRollups, type GroupedCategory } from "@/lib/event-groups";
+import { groupRollups, type GroupedCategory, type ManualGroupEntry } from "@/lib/event-groups";
 import { sortAccountsForNav } from "@/lib/account-nav-order";
+
+type EventOverride = {
+  id: string;
+  account_code: string;
+  event_key: string;
+  fiscal_year_start: number;
+  display_name: string | null;
+  description: string | null;
+  projected_revenue: number | null;
+  projected_expenses: number | null;
+  group_name: string | null;
+};
 
 /** Recharts must not load on the server — avoids missing `vendor-chunks/recharts.js` in dev. */
 const FiscalCharts = dynamic(() => import("./fiscal-charts"), {
@@ -145,7 +157,7 @@ function AccountNav({ accounts }: { accounts: Account[] }) {
 
   return (
     <nav
-      className="mb-8 flex flex-wrap gap-2 border-b border-zinc-200 pb-4 dark:border-zinc-800"
+      className="mb-8 flex flex-wrap items-center gap-2 border-b border-zinc-200 pb-4 dark:border-zinc-800"
       aria-label="Accounts"
     >
       <Link href="/" className={linkCls(pathname === "/")}>
@@ -163,6 +175,14 @@ function AccountNav({ accounts }: { accounts: Account[] }) {
           </Link>
         );
       })}
+      <div className="ml-auto">
+        <a
+          href="mailto:jerryyan745@gmail.com?subject=ASB%20Financial%20Inquiry"
+          className="rounded-lg px-3 py-2 text-sm font-medium text-zinc-500 ring-1 ring-zinc-200 transition hover:bg-zinc-50 hover:text-zinc-700 dark:text-zinc-400 dark:ring-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+        >
+          Contact Treasurer
+        </a>
+      </div>
     </nav>
   );
 }
@@ -196,13 +216,25 @@ function CategoryCards({
   previous,
   fyCurrentLabel,
   fyPreviousLabel,
+  overrides,
+  onEdit,
 }: {
   current: EventRollup[];
   previous: EventRollup[];
   fyCurrentLabel: string;
   fyPreviousLabel: string;
+  overrides: EventOverride[];
+  onEdit?: (accountCode: string, eventKey: string, fy: number, inflow: number, outflow: number) => void;
 }) {
-  const groups = useMemo(() => groupRollups(current, previous), [current, previous]);
+  const manualGroups: ManualGroupEntry[] = useMemo(
+    () => overrides.filter((o) => o.group_name).map((o) => ({
+      account_code: o.account_code,
+      event_key: o.event_key,
+      group_name: o.group_name,
+    })),
+    [overrides],
+  );
+  const groups = useMemo(() => groupRollups(current, previous, manualGroups), [current, previous, manualGroups]);
   if (groups.length === 0) return null;
 
   return (
@@ -213,6 +245,9 @@ function CategoryCards({
           group={g}
           fyCurrentLabel={fyCurrentLabel}
           fyPreviousLabel={fyPreviousLabel}
+          overrides={overrides}
+          onEdit={onEdit ?? undefined}
+          rollups={current}
         />
       ))}
     </div>
@@ -243,10 +278,16 @@ function GroupCard({
   group: g,
   fyCurrentLabel,
   fyPreviousLabel,
+  overrides,
+  onEdit,
+  rollups,
 }: {
   group: GroupedCategory;
   fyCurrentLabel: string;
   fyPreviousLabel: string;
+  overrides: EventOverride[];
+  onEdit?: (accountCode: string, eventKey: string, fy: number, inflow: number, outflow: number) => void;
+  rollups: EventRollup[];
 }) {
   const [open, setOpen] = useState(false);
   const timeout = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -261,6 +302,17 @@ function GroupCard({
 
   const isGrouped = g.subEvents.length > 1;
 
+  const matchingOverrides = overrides.filter((o) => g.subEvents.includes(o.event_key));
+  const projRevenue = matchingOverrides.reduce((s, o) => s + (o.projected_revenue ?? 0), 0);
+  const projExpenses = matchingOverrides.reduce((s, o) => s + (o.projected_expenses ?? 0), 0);
+  const groupDescription = matchingOverrides.find((o) => o.description)?.description;
+  const displayName = matchingOverrides.find((o) => o.display_name)?.display_name;
+
+  const firstRollup = rollups.find((r) => g.subEvents.includes(r.eventKey));
+  const editAccountCode = firstRollup?.accountCode ?? "";
+  const editFy = firstRollup?.fiscalYearStart ?? 0;
+  const editEventKey = g.subEvents[0] ?? g.group;
+
   return (
     <div
       className="relative rounded-lg border border-zinc-200 bg-white p-4 transition hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-600"
@@ -269,14 +321,20 @@ function GroupCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">
-          {g.group}
+          {displayName || g.group}
         </div>
-        {isGrouped && (
-          <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-            {g.subEvents.length} events
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-1">
+          {isGrouped && (
+            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+              {g.subEvents.length} events
+            </span>
+          )}
+          {onEdit && <EditButton onClick={() => onEdit(editAccountCode, editEventKey, editFy, g.currentInflow, g.currentOutflow)} />}
+        </div>
       </div>
+      {groupDescription && (
+        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400 truncate">{groupDescription}</p>
+      )}
 
       <div className="mt-2 flex items-baseline gap-3">
         <div>
@@ -309,6 +367,13 @@ function GroupCard({
       <div className="mt-1 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
         {g.currentTxns} txns
       </div>
+
+      {projRevenue > 0 && (
+        <ProjectionBar projected={projRevenue} actual={g.currentInflow} label="Rev" />
+      )}
+      {projExpenses > 0 && (
+        <ProjectionBar projected={projExpenses} actual={g.currentOutflow} label="Exp" />
+      )}
 
       {open && (
         <div className="absolute left-0 top-full z-40 mt-1 w-80 rounded-lg border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
@@ -360,13 +425,94 @@ function RollupTable({
   title,
   rows,
   showAccountColumn,
+  overrides,
+  onEdit,
+  onMerged,
+  readOnly,
 }: {
   title: string;
   rows: EventRollup[];
   showAccountColumn: boolean;
+  overrides: EventOverride[];
+  onEdit?: (accountCode: string, eventKey: string, fy: number, inflow: number, outflow: number) => void;
+  onMerged?: () => void;
+  readOnly?: boolean;
 }) {
   const [sort, setSort] = useState<SortKey>("outflow-desc");
   const sorted = useMemo(() => sortRows(rows, sort), [rows, sort]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [merging, setMerging] = useState(false);
+  const [mergeName, setMergeName] = useState("");
+  const [mergeError, setMergeError] = useState("");
+
+  const toggleSelect = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (selected.size === sorted.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(sorted.map((r) => `${r.accountCode}|${r.eventKey}|${r.fiscalYearStart}`)));
+    }
+  };
+
+  const selectedRows = sorted.filter((r) => selected.has(`${r.accountCode}|${r.eventKey}|${r.fiscalYearStart}`));
+
+  const doMerge = async () => {
+    if (!mergeName.trim() || selectedRows.length < 2) return;
+    setMergeError("");
+    setMerging(true);
+    try {
+      const fy = selectedRows[0].fiscalYearStart;
+      const events = selectedRows.map((r) => ({ account_code: r.accountCode, event_key: r.eventKey }));
+      const res = await fetch("/api/events/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ events, fiscal_year_start: fy, group_name: mergeName.trim() }),
+      });
+      if (!res.ok) {
+        const j = await res.json();
+        throw new Error(j.error ?? "Merge failed");
+      }
+      setSelected(new Set());
+      setMergeName("");
+      onMerged?.();
+    } catch (e) {
+      setMergeError(e instanceof Error ? e.message : "Merge failed");
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  const doUnmerge = async () => {
+    setMergeError("");
+    setMerging(true);
+    try {
+      const fy = selectedRows[0].fiscalYearStart;
+      const events = selectedRows.map((r) => ({ account_code: r.accountCode, event_key: r.eventKey }));
+      const res = await fetch("/api/events/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ events, fiscal_year_start: fy, group_name: null }),
+      });
+      if (!res.ok) {
+        const j = await res.json();
+        throw new Error(j.error ?? "Unmerge failed");
+      }
+      setSelected(new Set());
+      onMerged?.();
+    } catch (e) {
+      setMergeError(e instanceof Error ? e.message : "Unmerge failed");
+    } finally {
+      setMerging(false);
+    }
+  };
 
   if (rows.length === 0) {
     return (
@@ -381,6 +527,43 @@ function RollupTable({
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      {!readOnly && selected.size >= 2 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-blue-200 bg-blue-50 px-4 py-2 dark:border-blue-800 dark:bg-blue-950/40">
+          <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
+            {selected.size} events selected
+          </span>
+          <input
+            className="rounded-md border border-blue-300 bg-white px-2 py-1 text-sm dark:border-blue-600 dark:bg-blue-900 dark:text-blue-100"
+            placeholder="Group name…"
+            value={mergeName}
+            onChange={(e) => setMergeName(e.target.value)}
+          />
+          <button
+            type="button"
+            disabled={merging || !mergeName.trim()}
+            onClick={doMerge}
+            className="rounded-md bg-blue-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-50 hover:bg-blue-700"
+          >
+            {merging ? "Merging…" : "Merge"}
+          </button>
+          <button
+            type="button"
+            disabled={merging}
+            onClick={doUnmerge}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+          >
+            Unmerge
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="text-sm text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+          >
+            Clear
+          </button>
+          {mergeError && <span className="text-sm text-red-600 dark:text-red-400">{mergeError}</span>}
+        </div>
+      )}
       <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
           {title}
@@ -402,6 +585,17 @@ function RollupTable({
         <table className="w-full text-left text-sm">
           <thead className="bg-zinc-50 text-xs uppercase text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
             <tr>
+              {!readOnly && (
+                <th className="px-2 py-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selected.size === sorted.length && sorted.length > 0}
+                    onChange={selectAll}
+                    className="h-3.5 w-3.5 rounded border-zinc-300 dark:border-zinc-600"
+                  />
+                </th>
+              )}
+              {!readOnly && <th className="px-2 py-2 w-8"></th>}
               {showAccountColumn ? (
                 <th className="px-3 py-2">Acct</th>
               ) : null}
@@ -409,6 +603,8 @@ function RollupTable({
               <th className="px-3 py-2 text-right">In</th>
               <th className="px-3 py-2 text-right">Out</th>
               <th className="px-3 py-2 text-right">Net</th>
+              <th className="px-3 py-2 text-right">Proj Rev</th>
+              <th className="px-3 py-2 text-right">Proj Exp</th>
               <th className="px-3 py-2 text-right">Txns</th>
               <th className="px-3 py-2 text-right">Receipts</th>
               <th className="px-3 py-2 text-right">Scholarship</th>
@@ -416,42 +612,79 @@ function RollupTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {sorted.map((r) => (
-              <tr
-                key={`${r.accountCode}-${r.eventKey}-${r.fiscalYearStart}`}
-                className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
-              >
-                {showAccountColumn ? (
-                  <td className="px-3 py-2 font-mono text-zinc-700 dark:text-zinc-300">
-                    {r.accountCode}
+            {sorted.map((r) => {
+              const ov = overrides.find(
+                (o) => o.account_code === r.accountCode && o.event_key === r.eventKey && o.fiscal_year_start === r.fiscalYearStart,
+              );
+              const name = ov?.display_name || r.eventKey;
+              const rowKey = `${r.accountCode}|${r.eventKey}|${r.fiscalYearStart}`;
+              const isSelected = selected.has(rowKey);
+              return (
+                <tr
+                  key={`${r.accountCode}-${r.eventKey}-${r.fiscalYearStart}`}
+                  className={`hover:bg-zinc-50 dark:hover:bg-zinc-900/50 ${isSelected ? "bg-blue-50 dark:bg-blue-950/30" : ""}`}
+                >
+                  {!readOnly && (
+                    <td className="px-2 py-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(rowKey)}
+                        className="h-3.5 w-3.5 rounded border-zinc-300 dark:border-zinc-600"
+                      />
+                    </td>
+                  )}
+                  {!readOnly && (
+                    <td className="px-2 py-2">
+                      {onEdit && <EditButton onClick={() => onEdit(r.accountCode, r.eventKey, r.fiscalYearStart, r.inflow, r.outflow)} />}
+                    </td>
+                  )}
+                  {showAccountColumn ? (
+                    <td className="px-3 py-2 font-mono text-zinc-700 dark:text-zinc-300">
+                      {r.accountCode}
+                    </td>
+                  ) : null}
+                  <td className="max-w-xs px-3 py-2 text-zinc-800 dark:text-zinc-200">
+                    <span>{name}</span>
+                    {ov?.group_name && (
+                      <span className="ml-1.5 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-400">
+                        {ov.group_name}
+                      </span>
+                    )}
+                    {ov?.description && (
+                      <span className="ml-1 text-xs text-zinc-400" title={ov.description}>📝</span>
+                    )}
                   </td>
-                ) : null}
-                <td className="max-w-xs px-3 py-2 text-zinc-800 dark:text-zinc-200">
-                  {r.eventKey}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-emerald-700 dark:text-emerald-400">
-                  {formatMoney(r.inflow)}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-rose-700 dark:text-rose-400">
-                  {formatMoney(r.outflow)}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums font-medium text-zinc-900 dark:text-zinc-100">
-                  {formatMoney(r.net)}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
-                  {r.txnCount}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
-                  {r.receiptCount}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
-                  {formatMoney(r.scholarshipNet)}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
-                  {r.ticketLikeCount}
-                </td>
-              </tr>
-            ))}
+                  <td className="px-3 py-2 text-right tabular-nums text-emerald-700 dark:text-emerald-400">
+                    {formatMoney(r.inflow)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-rose-700 dark:text-rose-400">
+                    {formatMoney(r.outflow)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium text-zinc-900 dark:text-zinc-100">
+                    {formatMoney(r.net)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-500 dark:text-zinc-400">
+                    {ov?.projected_revenue != null ? formatMoney(ov.projected_revenue) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-500 dark:text-zinc-400">
+                    {ov?.projected_expenses != null ? formatMoney(ov.projected_expenses) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+                    {r.txnCount}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+                    {r.receiptCount}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+                    {formatMoney(r.scholarshipNet)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+                    {r.ticketLikeCount}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -460,6 +693,237 @@ function RollupTable({
         batches; excludes pure refunds).
       </p>
     </div>
+  );
+}
+
+function useOverrides(fiscalYearStart: number | null, accountCode: string | null) {
+  const [overrides, setOverrides] = useState<EventOverride[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (fiscalYearStart != null) params.set("fy", String(fiscalYearStart));
+    if (accountCode) params.set("accountCode", accountCode);
+    try {
+      const res = await fetch(`/api/events/overrides?${params}`);
+      if (res.ok) {
+        const j = await res.json();
+        setOverrides(j.overrides ?? []);
+      }
+    } catch {
+      // table may not exist yet
+    }
+    setLoaded(true);
+  }, [fiscalYearStart, accountCode]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const lookup = useCallback(
+    (accountCode: string, eventKey: string, fy: number) =>
+      overrides.find(
+        (o) => o.account_code === accountCode && o.event_key === eventKey && o.fiscal_year_start === fy,
+      ) ?? null,
+    [overrides],
+  );
+
+  return { overrides, loaded, refresh, lookup };
+}
+
+function EditEventModal({
+  open,
+  onClose,
+  onSaved,
+  accountCode,
+  eventKey,
+  fiscalYearStart,
+  existing,
+  actualRevenue,
+  actualExpenses,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+  accountCode: string;
+  eventKey: string;
+  fiscalYearStart: number;
+  existing: EventOverride | null;
+  actualRevenue: number;
+  actualExpenses: number;
+}) {
+  const [displayName, setDisplayName] = useState(existing?.display_name ?? "");
+  const [description, setDescription] = useState(existing?.description ?? "");
+  const [projRevenue, setProjRevenue] = useState(
+    existing?.projected_revenue != null ? String(existing.projected_revenue) : "",
+  );
+  const [projExpenses, setProjExpenses] = useState(
+    existing?.projected_expenses != null ? String(existing.projected_expenses) : "",
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setDisplayName(existing?.display_name ?? "");
+      setDescription(existing?.description ?? "");
+      setProjRevenue(existing?.projected_revenue != null ? String(existing.projected_revenue) : "");
+      setProjExpenses(existing?.projected_expenses != null ? String(existing.projected_expenses) : "");
+      setError("");
+    }
+  }, [open, existing]);
+
+  if (!open) return null;
+
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const res = await fetch("/api/events/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_code: accountCode,
+          event_key: eventKey,
+          fiscal_year_start: fiscalYearStart,
+          display_name: displayName.trim() || null,
+          description: description.trim() || null,
+          projected_revenue: projRevenue ? Number(projRevenue) : null,
+          projected_expenses: projExpenses ? Number(projExpenses) : null,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json();
+        throw new Error(j.error ?? "Save failed");
+      }
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Edit Event</h3>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          {eventKey} · {accountCode} · FY {fiscalYearStart}
+        </p>
+
+        <div className="mt-4 space-y-3">
+          <label className="block text-sm">
+            <span className="text-zinc-600 dark:text-zinc-400">Display name</span>
+            <input
+              className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder={eventKey}
+            />
+          </label>
+
+          <label className="block text-sm">
+            <span className="text-zinc-600 dark:text-zinc-400">Description</span>
+            <textarea
+              className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              rows={2}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional notes about this event"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="text-zinc-600 dark:text-zinc-400">Projected revenue</span>
+              <input
+                type="number"
+                step="0.01"
+                className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                value={projRevenue}
+                onChange={(e) => setProjRevenue(e.target.value)}
+                placeholder="$0.00"
+              />
+              <span className="mt-0.5 block text-xs text-zinc-400">
+                Actual: {formatMoney(actualRevenue)}
+              </span>
+            </label>
+            <label className="block text-sm">
+              <span className="text-zinc-600 dark:text-zinc-400">Projected expenses</span>
+              <input
+                type="number"
+                step="0.01"
+                className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                value={projExpenses}
+                onChange={(e) => setProjExpenses(e.target.value)}
+                placeholder="$0.00"
+              />
+              <span className="mt-0.5 block text-xs text-zinc-400">
+                Actual: {formatMoney(actualExpenses)}
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-4 py-2 text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={save}
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectionBar({ projected, actual, label }: { projected: number; actual: number; label: string }) {
+  if (projected <= 0) return null;
+  const pct = Math.min((actual / projected) * 100, 100);
+  const over = actual > projected;
+  return (
+    <div className="mt-1">
+      <div className="flex items-center justify-between text-[10px] text-zinc-500 dark:text-zinc-400">
+        <span>{label} proj: {formatMoney(projected)}</span>
+        <span className={over ? "font-medium text-rose-600 dark:text-rose-400" : ""}>
+          {pct.toFixed(0)}%
+        </span>
+      </div>
+      <div className="mt-0.5 h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-700">
+        <div
+          className={`h-1.5 rounded-full transition-all ${over ? "bg-rose-500" : "bg-emerald-500"}`}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function EditButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className="inline-flex items-center rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+      title="Edit event"
+    >
+      ✎
+    </button>
   );
 }
 
@@ -480,11 +944,27 @@ export default function DashboardClient(props: {
   /** FY labels matching rollup table rows (aligned with chart data years). */
   dataFyCurrentLabel: string;
   dataFyPreviousLabel: string;
+  role?: "admin" | "journalist";
 }) {
+  const isAdmin = props.role !== "journalist";
   const router = useRouter();
   const [secret, setSecret] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const currentFy = props.rollupsCurrent[0]?.fiscalYearStart ?? null;
+  const { overrides, refresh: refreshOverrides, lookup: lookupOverride } = useOverrides(
+    null,
+    props.scopeMode === "account" ? props.scopeAccountCode : null,
+  );
+
+  const [editTarget, setEditTarget] = useState<{
+    accountCode: string;
+    eventKey: string;
+    fiscalYearStart: number;
+    actualRevenue: number;
+    actualExpenses: number;
+  } | null>(null);
   const [qFy, setQFy] = useState(
     String(
       new Date().getMonth() >= 6
@@ -635,7 +1115,7 @@ export default function DashboardClient(props: {
         scopeMode={props.scopeMode}
       />
 
-      <section className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/40">
+      {isAdmin && <section className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/40">
         <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-zinc-600 dark:text-zinc-400">
           Controls
         </h2>
@@ -757,7 +1237,7 @@ export default function DashboardClient(props: {
         {status ? (
           <p className="mt-3 text-sm text-zinc-700 dark:text-zinc-300">{status}</p>
         ) : null}
-      </section>
+      </section>}
 
       {props.scopeMode === "overview" ? (
         <section className="space-y-3">
@@ -794,13 +1274,19 @@ export default function DashboardClient(props: {
           </h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
             Hover over a card for a full breakdown and year-over-year comparison.
-            Related events (Prom, Homecoming, etc.) are combined.
+            Related events (Prom, Homecoming, etc.) are combined.{isAdmin ? " Click ✎ to edit." : ""}
           </p>
           <CategoryCards
             current={props.rollupsCurrent}
             previous={props.rollupsPrevious}
             fyCurrentLabel={props.dataFyCurrentLabel}
             fyPreviousLabel={props.dataFyPreviousLabel}
+            overrides={overrides}
+            onEdit={isAdmin
+              ? (accountCode, eventKey, fy, inflow, outflow) =>
+                  setEditTarget({ accountCode, eventKey, fiscalYearStart: fy, actualRevenue: inflow, actualExpenses: outflow })
+              : undefined
+            }
           />
         </section>
       )}
@@ -810,13 +1296,43 @@ export default function DashboardClient(props: {
           title={`Rollups (${props.dataFyCurrentLabel})`}
           rows={props.rollupsCurrent}
           showAccountColumn={showAcctCol}
+          overrides={overrides}
+          onEdit={isAdmin
+            ? (accountCode, eventKey, fy, inflow, outflow) =>
+                setEditTarget({ accountCode, eventKey, fiscalYearStart: fy, actualRevenue: inflow, actualExpenses: outflow })
+            : undefined
+          }
+          onMerged={isAdmin ? refreshOverrides : undefined}
+          readOnly={!isAdmin}
         />
         <RollupTable
           title={`Rollups (${props.dataFyPreviousLabel})`}
           rows={props.rollupsPrevious}
           showAccountColumn={showAcctCol}
+          overrides={overrides}
+          onEdit={isAdmin
+            ? (accountCode, eventKey, fy, inflow, outflow) =>
+                setEditTarget({ accountCode, eventKey, fiscalYearStart: fy, actualRevenue: inflow, actualExpenses: outflow })
+            : undefined
+          }
+          onMerged={isAdmin ? refreshOverrides : undefined}
+          readOnly={!isAdmin}
         />
       </div>
+
+      {isAdmin && editTarget && (
+        <EditEventModal
+          open={!!editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={refreshOverrides}
+          accountCode={editTarget.accountCode}
+          eventKey={editTarget.eventKey}
+          fiscalYearStart={editTarget.fiscalYearStart}
+          existing={lookupOverride(editTarget.accountCode, editTarget.eventKey, editTarget.fiscalYearStart)}
+          actualRevenue={editTarget.actualRevenue}
+          actualExpenses={editTarget.actualExpenses}
+        />
+      )}
     </div>
   );
 }

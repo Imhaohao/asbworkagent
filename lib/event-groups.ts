@@ -33,10 +33,32 @@ export type GroupedCategory = {
   subEvents: string[];
 };
 
+export type ManualGroupEntry = {
+  account_code: string;
+  event_key: string;
+  group_name: string | null;
+};
+
 export function groupRollups(
   current: EventRollup[],
   previous: EventRollup[],
+  manualGroups?: ManualGroupEntry[],
 ): GroupedCategory[] {
+  const manualMap = new Map<string, string>();
+  if (manualGroups) {
+    for (const m of manualGroups) {
+      if (m.group_name) {
+        manualMap.set(`${m.account_code}|${m.event_key}`, m.group_name);
+      }
+    }
+  }
+
+  const resolveGroup = (accountCode: string, eventKey: string): string => {
+    const manual = manualMap.get(`${accountCode}|${eventKey}`);
+    if (manual) return manual;
+    return groupNameFor(eventKey);
+  };
+
   const map = new Map<string, GroupedCategory>();
 
   const ensure = (group: string): GroupedCategory => {
@@ -60,7 +82,7 @@ export function groupRollups(
   };
 
   for (const r of current) {
-    const group = groupNameFor(r.eventKey);
+    const group = resolveGroup(r.accountCode, r.eventKey);
     const g = ensure(group);
     g.currentInflow += r.inflow;
     g.currentOutflow += r.outflow;
@@ -70,7 +92,7 @@ export function groupRollups(
   }
 
   for (const r of previous) {
-    const group = groupNameFor(r.eventKey);
+    const group = resolveGroup(r.accountCode, r.eventKey);
     const g = ensure(group);
     g.previousInflow += r.inflow;
     g.previousOutflow += r.outflow;
